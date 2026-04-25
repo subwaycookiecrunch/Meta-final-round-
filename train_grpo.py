@@ -41,14 +41,14 @@ CHECKPOINT_DIR = os.path.join(OUTPUT_DIR, "checkpoints")
 # Training hyperparameters (tuned for 8B on A10G 24GB VRAM)
 NUM_EPISODES = 200           # 200 episodes is enough for clear curves
 NUM_GENERATIONS = 2          # reduced from 4 to fit 8B in VRAM
-MAX_COMPLETION_LENGTH = 1536 # completions for reasoning + reports
+MAX_COMPLETION_LENGTH = 1024 # reduced from 1536 to save VRAM
 BATCH_SIZE = 1               # 8B needs small batch to fit in memory
 GRAD_ACCUM_STEPS = 8         # effective batch = 1 * 8 = 8
 LEARNING_RATE = 1e-6         # slightly lower LR for 8B stability
 WARMUP_RATIO = 0.05          # gentle warmup prevents early instability
-MAX_SEQ_LENGTH = 4096        # practical context for VRAM
-LORA_R = 32                  # higher rank = more capacity for 8B
-LORA_ALPHA = 64              # 2x rank is standard
+MAX_SEQ_LENGTH = 2048        # reduced from 4096 to prevent OOM
+LORA_R = 16                  # reduced from 32 to save memory
+LORA_ALPHA = 32              # 2x rank
 SAVE_EVERY = 50              # checkpoint every 50 steps
 USE_UNSLOTH = os.environ.get("USE_UNSLOTH", "true").lower() == "true"
 
