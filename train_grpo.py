@@ -84,7 +84,7 @@ ADAPTER_PATH = os.environ.get("ADAPTER_PATH", "")
 #   GRPO_BETA               0.02
 #   METACOG_ENABLED         true
 #   LORA_R / LORA_ALPHA     16 / 32
-NUM_EPISODES = int(os.environ.get("NUM_EPISODES", "100"))
+NUM_EPISODES = int(os.environ.get("NUM_EPISODES", "200"))
 NUM_GENERATIONS = 2          # GRPO group size
 MAX_COMPLETION_LENGTH = int(os.environ.get("MAX_COMPLETION_LENGTH", "1024"))
 BATCH_SIZE = 1
