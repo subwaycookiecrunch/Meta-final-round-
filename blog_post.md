@@ -166,7 +166,7 @@ The SFT data is 48 examples, ~400 files total. Not a lot. But you don't need a l
 - PEFT LoRA r=16 alpha=32
 - Gradio 5
 
-`lr=1e-6`, `warmup=0.10`, `KL beta=0.02`, `MAX_SEQ=2048`, `MAX_COMPLETION=1024`. 200 episodes, 2 epochs, ~400 steps, about 12 hours on A10G.
+`lr=5e-6`, `warmup=0.05`, `KL beta=0.04`, `MAX_SEQ=2048`, `MAX_COMPLETION=1024`. 200 episodes, 1 epoch, ~200 steps. SFT warmup (48 examples, 3 epochs) then GRPO, about 7 hours total on A10G.
 
 ## Next
 

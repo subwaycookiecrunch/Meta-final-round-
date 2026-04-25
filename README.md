@@ -98,6 +98,7 @@ Reasoning models burn 4,000+ tokens to answer questions a base model would solve
 | [`SAFEGUARDS.md`](SAFEGUARDS.md) | Formal writeup of every attack family + the geometric argument for why the multi-component reward is functionally orthogonal | 3 min |
 | [`PAPER.md`](PAPER.md) §4.3–4.4 | Formal reward equations + adversarial robustness theorem | 5 min |
 | `grpo_output/improvement_panel.png` | Single composite figure showing all four improvement axes — GRPO curve, env F1, transfer F1, red-team gap — on one image | 30 sec |
+| [`rubrics.py`](rubrics.py) | 8 composable sub-rubrics using OpenEnv's `WeightedRubric` container — each component is independently introspectable via `.last_score` | 2 min |
 | **🔬 Live Trace Inspector** tab | Real-time view of every reward call from training, with distribution stats. Addresses §15 of the guide ("inspect actual generations"). | 1 min |
 
 Reproduce the red-team safety proof in one second:
@@ -413,6 +414,7 @@ print(env.session.invest_used, "/", env.session.invest_budget)
 | `train_grpo.py` | GRPO training script — v2 with metacognitive reward, lower LR, longer warmup |
 | **`metacognitive_reward.py`** | **NEW — calibration + difficulty awareness + coupling reward** |
 | **`scripts/budget_processor.py`** | **NEW — `LogitsProcessor` for inference-time hard `<think>` cap** |
+| **`rubrics.py`** | **NEW — OpenEnv `Rubric` hierarchy: 8 composable sub-rubrics using `WeightedRubric`** |
 | **`transfer_eval.py`** | **NEW — held-out non-CVE domain transfer evaluation** |
 | **`scripts/generate_calibration_plot.py`** | **NEW — generates the metacognitive calibration plot** |
 | `train_colab.ipynb` | One-click Colab notebook for judges |
@@ -436,11 +438,12 @@ print(env.session.invest_used, "/", env.session.invest_budget)
 ## Submission deliverables (hackathon checklist)
 
 - [x] **OpenEnv (latest)** — `MCPEnvironment` + FastMCP, manifest in `openenv.yaml`
+- [x] **Composable Rubric system** — `rubrics.py` with 8 `Rubric` subclasses using `WeightedRubric` (addresses guide §"composable rubrics > monolithic scoring")
 - [x] **Training script (TRL + Unsloth)** — `train_grpo.py` with GRPOTrainer + metacognitive reward
 - [x] **Calibrated metacognition reward** — `metacognitive_reward.py` (the v2 contribution)
 - [x] **Inference-time budget enforcement** — `scripts/budget_processor.py`
 - [x] **Domain-transfer eval** — `transfer_eval.py` + `data/transfer_episodes.json`
-- [x] **Colab notebook** — `train_colab.ipynb` (one-click reproducible)
+- [x] **Colab notebook** — `train_colab.ipynb` (one-click reproducible, judges can re-run)
 - [x] **HF Space (6 tabs)** — [code-review-env-v3](https://huggingface.co/spaces/lucid987654/code-review-env-v3), live + interactive demo + budget slider + calibration plots
 - [x] **Reward & loss plots** — `grpo_output/training_curves.png`
 - [x] **Calibration plot** — `grpo_output/calibration_plot.png`

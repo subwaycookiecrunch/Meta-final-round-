@@ -56,6 +56,7 @@ tools:
 # ── Reward Function (composite) ────────────────────────────────────
 # Total = 0.50 · env_score  +  0.30 · metacognitive_score  +  0.20 · text_score
 reward:
+  rubric_class: rubrics:ThinkingBudgetRubric   # OpenEnv Rubric hierarchy
   type: composite
   formula: "0.50·env_score + 0.30·metacognitive_score + 0.20·text_score"
   env_components:
@@ -141,14 +142,14 @@ training:
   precision: bfloat16 (4-bit quantized base + bf16 LoRA)
   lora_rank: 16
   lora_alpha: 32
-  num_episodes: 200            # v2.3: right-sized for A10G wall-clock budget
-  num_train_epochs: 2          # v2.3: ~200 optimizer steps total → ~5.5h on A10G
-  learning_rate: 1e-6          # v2.2: 1.7B can take a higher LR safely
-  warmup_ratio: 0.10           # longer warmup damps early instability
-  grpo_beta: 0.02              # KL coefficient — wider exploration
-  max_seq_length: 2048         # v2.3: smaller batch memory, faster steps
-  max_completion_length: 1024  # v2.3: 2× generation speedup (vs v2.2 2048)
-  grad_accum_steps: 2          # v2.3: 2× optimizer-step rate
+  num_episodes: 200            # full dataset, 1 epoch
+  num_train_epochs: 1           # single pass — SFT warmup handles format
+  learning_rate: 5e-6           # 5× higher for visible signal on 1.7B
+  warmup_ratio: 0.05            # fast ramp to full LR
+  grpo_beta: 0.04               # higher KL → smoother curve
+  max_seq_length: 2048
+  max_completion_length: 1024
+  grad_accum_steps: 2
   metacognitive_reward_weight: 0.30
   in_training_eval:
     calibration_log_every: 1   # every reward call logs (pred, len, label)

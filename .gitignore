@@ -23,3 +23,6 @@ grpo_output/trainer_state.json
 
 # Local notebooks state
 .ipynb_checkpoints/
+__pycache__/
+.DS_Store
+.venv/
