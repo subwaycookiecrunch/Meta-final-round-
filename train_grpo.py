@@ -39,19 +39,34 @@ MODEL_NAME = "Qwen/Qwen3-8B"
 OUTPUT_DIR = "./grpo_output"
 CHECKPOINT_DIR = os.path.join(OUTPUT_DIR, "checkpoints")
 
-# Training hyperparameters (tuned for 8B on A10G 24GB VRAM)
-NUM_EPISODES = 200           # 200 episodes is enough for clear curves
-NUM_GENERATIONS = 2          # reduced from 4 to fit 8B in VRAM
-MAX_COMPLETION_LENGTH = 1024 # reduced from 1536 to save VRAM
-BATCH_SIZE = 1               # 8B needs small batch to fit in memory
+# Training hyperparameters (tuned for 8B on A10G/A100, v2 — metacognitive)
+# v2 changes vs v1 ("flat curve over 50 steps" run):
+#   NUM_EPISODES   200 → 300   (more diverse rollouts)
+#   num_train_epochs 1 → 2      (gives ~150 optimizer steps vs 50)
+#   LEARNING_RATE  1e-6 → 5e-7  (halved — v1 showed late-mean below early-mean)
+#   WARMUP_RATIO   0.05 → 0.10  (longer warmup damps early instability)
+#   MAX_COMPLETION_LENGTH 1024 → 1280  (room for budget predictions + thinking)
+#   GRPO beta      default → 0.02      (lower KL allows wider exploration)
+NUM_EPISODES = 300
+NUM_GENERATIONS = 2          # 8B in 24 GB VRAM
+MAX_COMPLETION_LENGTH = 1280 # +256 for <budget_prediction> + extra <think>
+BATCH_SIZE = 1
 GRAD_ACCUM_STEPS = 8         # effective batch = 1 * 8 = 8
-LEARNING_RATE = 1e-6         # slightly lower LR for 8B stability
-WARMUP_RATIO = 0.05          # gentle warmup prevents early instability
-MAX_SEQ_LENGTH = 2048        # reduced from 4096 to prevent OOM
-LORA_R = 16                  # reduced from 32 to save memory
-LORA_ALPHA = 32              # 2x rank
-SAVE_EVERY = 50              # checkpoint every 50 steps
+LEARNING_RATE = 5e-7         # halved from v1 for stability
+WARMUP_RATIO = 0.10          # was 0.05
+NUM_TRAIN_EPOCHS = 2         # was 1 → 1: ~150 steps total
+GRPO_BETA = 0.02             # KL coefficient — lower allows more exploration
+MAX_SEQ_LENGTH = 2304        # +256 for the longer completion
+LORA_R = 16
+LORA_ALPHA = 32
+SAVE_EVERY = 50
 USE_UNSLOTH = os.environ.get("USE_UNSLOTH", "true").lower() == "true"
+
+# Metacognitive reward — the v2 contribution.  When True, the system prompt
+# requires <budget_prediction> tags and the reward function rewards
+# calibration + difficulty awareness (see metacognitive_reward.py).
+METACOG_ENABLED = os.environ.get("METACOG_ENABLED", "true").lower() == "true"
+METACOG_WEIGHT = 0.30        # Reward weight for the metacog component
 
 
 # ── System prompt for the security investigator ─────────────────────
@@ -86,6 +101,18 @@ Investigation strategy:
 - Write a thorough report: mention the CVE ID, affected files, vulnerability type, and root cause
 
 You have limited investigation points and flags. Be strategic — read the most suspicious files first."""
+
+
+# Metacognitive addendum: appended to the system prompt only when
+# METACOG_ENABLED.  Asks the model to emit a budget prediction BEFORE
+# every reasoning block.  The reward function then scores calibration
+# + difficulty awareness on those predictions.
+if METACOG_ENABLED:
+    try:
+        from metacognitive_reward import METACOG_SYSTEM_PROMPT_ADDENDUM
+        SYSTEM_PROMPT = SYSTEM_PROMPT + METACOG_SYSTEM_PROMPT_ADDENDUM
+    except ImportError:
+        print("⚠️  metacognitive_reward.py not importable; falling back to v1 prompt.")
 
 
 # ── Chat Template Formatting ───────────────────────────────────────
@@ -303,6 +330,8 @@ def reward_fn(completions, prompts=None, **kwargs):
         parsed_calls = parse_tool_calls(text)
         env_score = None
 
+        bug_files: set = set()  # ground-truth bug files for metacog reward
+
         if parsed_calls and len(parsed_calls) >= 2:
             # We have parseable tool calls — execute them live
             try:
@@ -322,6 +351,16 @@ def reward_fn(completions, prompts=None, **kwargs):
                 context = env.reset()
                 env.done = False
                 env.reward = 0.0
+
+                # Capture ground-truth bug files for the metacog reward.
+                # The wrapper stores InvestigationSession on env.env._sessions[sid].
+                try:
+                    sid = env.env._current_session_id
+                    sess = env.env._sessions.get(sid)
+                    if sess is not None:
+                        bug_files = set(sess.bugs)
+                except Exception:
+                    pass
 
                 # Execute each parsed tool call
                 for call in parsed_calls:
@@ -407,13 +446,35 @@ def reward_fn(completions, prompts=None, **kwargs):
         if len(lines) > 5 and len(set(lines)) / len(lines) < 0.3:
             text_score *= 0.3
 
-        # ── Step 3: Combine scores ────────────────────
+        # ── Step 3: Metacognitive reward (v2 contribution) ─
+        # Calibration: did <budget_prediction> match the actual <think> length?
+        # Difficulty awareness: long preds on bugs, short on safe?
+        # Coupling: every prediction tied to a real tool call?
+        metacog_score = 0.0
+        if METACOG_ENABLED:
+            try:
+                from metacognitive_reward import compute_metacognitive_reward
+                metacog = compute_metacognitive_reward(text, bug_files=bug_files)
+                metacog_score = metacog.raw_score
+            except Exception:
+                metacog_score = 0.0
+
+        # ── Step 4: Combine scores ────────────────────
+        # v2 weighting: env (50%) > metacog (30%) > text (20%) when live
+        # execution succeeds.  Fallback path keeps text dominant but still
+        # rewards metacognitive structure when present.
         if env_score is not None:
-            # Live execution succeeded — weight it heavily
-            final = 0.70 * env_score + 0.30 * text_score
+            if METACOG_ENABLED:
+                final = (0.50 * env_score
+                         + METACOG_WEIGHT * metacog_score
+                         + (0.50 - METACOG_WEIGHT) * text_score)
+            else:
+                final = 0.70 * env_score + 0.30 * text_score
         else:
-            # Fallback to text-only
-            final = text_score
+            if METACOG_ENABLED:
+                final = 0.70 * text_score + 0.30 * metacog_score
+            else:
+                final = text_score
 
         rewards.append(min(1.0, max(0.0, final)))
 
@@ -606,10 +667,14 @@ def install_lm_head_dtype_hook(model):
 def main():
     start_time = time.time()
     print("=" * 60)
-    print("  CodeReviewEnv v3 — GRPO Training")
+    print("  The Thinking Budget — GRPO Training v2 (metacognitive)")
     print(f"  Model: {MODEL_NAME}")
-    print(f"  Episodes: {NUM_EPISODES} | Batch: {BATCH_SIZE}×{GRAD_ACCUM_STEPS}")
-    print(f"  LR: {LEARNING_RATE} | LoRA: r={LORA_R}")
+    print(f"  Episodes: {NUM_EPISODES} × {NUM_TRAIN_EPOCHS} epoch(s) "
+          f"| Batch: {BATCH_SIZE}×{GRAD_ACCUM_STEPS}")
+    print(f"  LR: {LEARNING_RATE} | warmup: {WARMUP_RATIO} | β(KL): {GRPO_BETA}")
+    print(f"  LoRA: r={LORA_R}, α={LORA_ALPHA}")
+    print(f"  Metacognitive reward: {'ENABLED' if METACOG_ENABLED else 'OFF'} "
+          f"(weight={METACOG_WEIGHT})")
     print(f"  Checkpointing every {SAVE_EVERY} steps")
     print("=" * 60)
 
@@ -762,9 +827,21 @@ def main():
     # ── Configure GRPO ──────────────────────────────
     from trl import GRPOConfig, GRPOTrainer
 
+    # GRPOConfig accepts `beta` (KL coefficient) on TRL ≥ 0.17 — we
+    # pass it via kwargs to stay compatible with older versions that
+    # might not have the parameter.
+    grpo_kwargs = {}
+    try:
+        import inspect
+        sig = inspect.signature(GRPOConfig.__init__)
+        if "beta" in sig.parameters:
+            grpo_kwargs["beta"] = GRPO_BETA
+    except Exception:
+        pass
+
     config = GRPOConfig(
         output_dir=OUTPUT_DIR,
-        num_train_epochs=1,
+        num_train_epochs=NUM_TRAIN_EPOCHS,        # was 1, now 2 → ~150 steps
         per_device_train_batch_size=BATCH_SIZE,
         gradient_accumulation_steps=GRAD_ACCUM_STEPS,
         learning_rate=LEARNING_RATE,
@@ -779,6 +856,7 @@ def main():
         seed=42,
         # Resume from checkpoint if available
         resume_from_checkpoint=_find_latest_checkpoint(),
+        **grpo_kwargs,
     )
 
     trainer = GRPOTrainer(

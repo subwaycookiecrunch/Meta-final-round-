@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Training artefacts (only canonical outputs are committed)
+grpo_output/checkpoints/
+grpo_output/runs/
+grpo_output/trainer_state.json
+*.bin
+*.safetensors
+
+# Logs
+*.log
+
+# Local notebooks state
+.ipynb_checkpoints/

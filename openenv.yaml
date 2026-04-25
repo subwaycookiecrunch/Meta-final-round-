@@ -1,13 +1,22 @@
-# OpenEnv Manifest — CodeReviewEnv v3
+# OpenEnv Manifest — The Thinking Budget
 # Meta PyTorch OpenEnv Hackathon 2026
 # Theme 3.1: World Modeling → Professional Tasks
-name: code-review-env-v3
-version: "3.0.0"
+name: thinking-budget
+display_name: "The Thinking Budget"
+version: "3.2.0"   # v3.2: metacognitive reward + budget processor + transfer eval
 description: >
-  Agentic security investigation environment. An LLM agent uses 6 MCP tools
-  to read code, search for patterns, flag CVE vulnerabilities, and write
-  triage reports. Trains a "thinking budget" — the agent learns WHEN to
-  reason deeply (suspicious files) and WHEN to be brief (obviously safe files).
+  An RL environment + auxiliary objective that trains a reasoning LLM to
+  PREDICT how hard a problem is BEFORE solving it, then deliver exactly
+  that much reasoning, on the right files. The agent investigates a real
+  CVE patch using 6 MCP tools; before each <think> block it must emit
+  <budget_prediction>short|medium|long</budget_prediction>. The reward
+  function scores calibration, difficulty awareness, and coupling on top
+  of task F1. At inference time, a LogitsProcessor hard-caps <think>
+  tokens; the trained policy degrades gracefully under arbitrary
+  compute tightening. The learned policy transfers without retraining
+  to held-out non-CVE domains (PR review for race conditions, auth
+  bypasses, tenant leaks): F1 0.28 → 1.00, 5.2× allocation ratio
+  preserved.
 
 theme: "3.1 World Modeling / Professional Tasks"
 license: mit
@@ -43,10 +52,12 @@ tools:
     cost: 0
     description: Submit final triage report and end the investigation
 
-# ── Reward Function (5 components) ─────────────────────────────────
+# ── Reward Function (composite) ────────────────────────────────────
+# Total = 0.50 · env_score  +  0.30 · metacognitive_score  +  0.20 · text_score
 reward:
   type: composite
-  components:
+  formula: "0.50·env_score + 0.30·metacognitive_score + 0.20·text_score"
+  env_components:
     - name: f1_score
       weight: 0.35
       description: Precision × recall on vulnerability detection
@@ -58,10 +69,36 @@ reward:
       description: Strategic use of investigation budget (fewer wasted steps)
     - name: thinking_efficiency
       weight: 0.15
-      description: Deep reasoning on bugs, brief reasoning on safe files
+      description: In-environment proxy for selective deep reasoning
     - name: precision_bonus
       weight: 0.15
       description: Extra reward for zero-false-positive flagging
+  metacognitive_components:    # NEW in v3.2 — the paper's contribution
+    - name: calibration
+      weight: 0.50
+      description: |
+        Per <budget_prediction, think> pair: 1.0 iff actual think length ∈
+        predicted band [short:0-80, medium:80-250, long:250+], smooth decay
+        outside.
+    - name: difficulty_awareness
+      weight: 0.50
+      description: |
+        Per <prediction, think, tool_call> triple: 1.0 if (long & file is
+        bug) or (short & file is safe); 0.5 if medium; 0.0 if wrong direction.
+    - name: coupling
+      weight: multiplicative
+      description: |
+        (# predictions followed by a real tool call) / (# predictions).
+        Acts as a 0.5-1.0 multiplier so orphan predictions cannot game
+        the score.
+
+# ── Inference-time enforcement ─────────────────────────────────────
+# scripts/budget_processor.ThinkingBudgetProcessor — a LogitsProcessor
+# that hard-caps <think> tokens per block and per episode at inference.
+inference:
+  budget_processor: scripts.budget_processor:ThinkingBudgetProcessor
+  default_per_block_budget: 400
+  default_episode_budget: 2000
 
 # ── Dataset ────────────────────────────────────────────────────────
 dataset:
@@ -76,6 +113,18 @@ dataset:
     - CVE-2019-0708 (BlueKeep)
     - CVE-2020-1472 (Zerologon)
 
+# ── Held-out transfer eval ─────────────────────────────────────────
+transfer_eval:
+  domain: code-review (non-security)
+  episodes: 5
+  file_count: 56
+  episodes_file: data/transfer_episodes.json
+  expected_results:
+    untrained_f1: 0.28
+    trained_f1: 1.00
+    untrained_thinking_ratio: 1.29
+    trained_thinking_ratio: 5.24
+
 # ── Training ───────────────────────────────────────────────────────
 training:
   algorithm: GRPO
@@ -88,13 +137,19 @@ training:
   precision: bfloat16 (4-bit quantized base + bf16 LoRA)
   lora_rank: 16
   lora_alpha: 32
-  num_episodes: 200
+  num_episodes: 300         # v2: was 200
+  num_train_epochs: 2       # v2: was 1 → ~150 optimizer steps
+  learning_rate: 5e-7       # v2: was 1e-6
+  warmup_ratio: 0.10        # v2: was 0.05
+  grpo_beta: 0.02           # KL coefficient
+  max_completion_length: 1280  # v2: was 1024 (room for predictions + thinking)
+  metacognitive_reward_weight: 0.30
   live_environment_execution: true
   notes: |
     Reward function PARSES tool calls from model outputs and EXECUTES
-    them against the live environment. The model's investigation plan
-    is genuinely run, and the real environment score becomes the reward.
-    This is not a static dataset — the env is in the loop.
+    them against the live environment. Ground-truth bug labels are
+    extracted from the active session and passed to the metacognitive
+    reward so the difficulty-awareness component can be scored end-to-end.
 
 # ── Deployment ─────────────────────────────────────────────────────
 deployment:
@@ -104,16 +159,50 @@ deployment:
   app_entry: app.py
   sdk: gradio
   port: 7860
+  tabs:
+    - "🧠 Try The Agent — interactive trajectories"
+    - "📊 The Thinking Budget — hero histogram"
+    - "🎚 Budget Slider — live inference-time compute cap (NEW)"
+    - "📐 Calibration & Transfer — metacog + held-out domain (NEW)"
+    - "🏋️ Training Progress — auto-refresh GRPO logs"
+    - "📖 About — paper, links"
+
+# ── Innovation summary ─────────────────────────────────────────────
+innovation:
+  headline: "Calibrated metacognition as RL — train an LLM to know how hard a problem is BEFORE solving it"
+  novelty: |
+    Process Reward Models score whether reasoning is correct. They do
+    NOT score whether the model knew the difficulty in advance. This
+    auxiliary objective (calibration + difficulty awareness + coupling)
+    plus an inference-time LogitsProcessor produces a closed compute-
+    adaptive loop: shaping during GRPO → policy learns to allocate;
+    budget processor at inference → policy degrades gracefully under
+    arbitrary compute tightening. The learned policy transfers across
+    domains without retraining.
+  trained_policy_targets:
+    untrained_thinking_ratio: 1.07
+    trained_thinking_ratio:   6.06
+    transfer_thinking_ratio:  5.24    # held-out non-CVE domain
+    calibration_diag_acc:     0.88    # P(actual band == predicted band)
+    p_long_given_bug:         0.92
+    p_long_given_safe:        0.00
 
 # ── Tags (for OpenEnv discovery) ───────────────────────────────────
 tags:
   - openenv
   - openenv-mcp
-  - security
-  - cve
-  - vulnerability-detection
+  - thinking-budget
+  - meta-cognition
+  - calibrated-metacognition
+  - selective-reasoning
+  - reasoning-allocation
+  - compute-adaptive-inference
+  - inference-time-budget
+  - logits-processor
+  - domain-transfer
   - grpo
   - qwen3
-  - thinking-budget
   - agentic
   - tool-use
+  - cve
+  - security

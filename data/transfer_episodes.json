@@ -1,0 +1,98 @@
+[
+  {
+    "domain": "code-review",
+    "task_id": "TR-CR-001",
+    "title": "Pull request review — payment refactor",
+    "description": "A 12-file PR refactoring the order-payment flow. One file introduces a logic bug that double-charges customers under a race condition. Reviewer must identify which file contains the regression.",
+    "files": [
+      {"file": "src/api/orders/create.ts", "label": 1, "features": [82, 71, 5, 95], "language": "TypeScript", "is_test": false, "summary": "Order creation handler. Updated to call the new payment service. Race condition between balance read and balance write."},
+      {"file": "src/api/orders/list.ts", "label": 0, "features": [10, 25, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Read-only listing. Pagination cleanup."},
+      {"file": "src/api/orders/types.ts", "label": 0, "features": [3, 5, 0, 95], "language": "TypeScript", "is_test": false, "summary": "Shared type definitions. Added one optional field."},
+      {"file": "src/api/payments/charge.ts", "label": 1, "features": [65, 80, 8, 95], "language": "TypeScript", "is_test": false, "summary": "Payment charge function. Removed idempotency token check during refactor."},
+      {"file": "src/api/payments/refund.ts", "label": 0, "features": [12, 30, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Refund handler. Untouched."},
+      {"file": "src/api/payments/types.ts", "label": 0, "features": [2, 5, 0, 95], "language": "TypeScript", "is_test": false, "summary": "Type aliases."},
+      {"file": "src/utils/lock.ts", "label": 0, "features": [55, 60, 0, 95], "language": "TypeScript", "is_test": false, "summary": "Distributed lock helper. New file but well-tested elsewhere."},
+      {"file": "src/db/schema.sql", "label": 0, "features": [20, 10, 0, 95], "language": "SQL", "is_test": false, "summary": "Migration adding `idempotency_key` column."},
+      {"file": "src/api/orders/__tests__/create.test.ts", "label": 0, "features": [45, 30, 0, 95], "language": "TypeScript", "is_test": true, "summary": "Test file. Tests are passing."},
+      {"file": "src/api/payments/__tests__/charge.test.ts", "label": 0, "features": [40, 30, 0, 95], "language": "TypeScript", "is_test": true, "summary": "Test file. Race condition not covered (gap)."},
+      {"file": "package.json", "label": 0, "features": [3, 1, 0, 95], "language": "JSON", "is_test": false, "summary": "Bumped one dep."},
+      {"file": "README.md", "label": 0, "features": [2, 0, 0, 95], "language": "Markdown", "is_test": false, "summary": "Documentation update."}
+    ]
+  },
+  {
+    "domain": "code-review",
+    "task_id": "TR-CR-002",
+    "title": "Pull request review — auth middleware migration",
+    "description": "A 14-file PR migrating from a session middleware to JWT. One file introduces an authentication bypass under a specific path.",
+    "files": [
+      {"file": "src/auth/middleware.ts", "label": 1, "features": [78, 85, 4, 95], "language": "TypeScript", "is_test": false, "summary": "JWT middleware. Skips token check when `req.path === '/health'` — but the regex matches `/health/admin`."},
+      {"file": "src/auth/jwt.ts", "label": 0, "features": [50, 60, 0, 95], "language": "TypeScript", "is_test": false, "summary": "JWT signing/verifying. Library wrapper, no logic changes."},
+      {"file": "src/auth/session.ts", "label": 0, "features": [70, 30, 0, 95], "language": "TypeScript", "is_test": false, "summary": "Old session middleware. Deleted."},
+      {"file": "src/auth/types.ts", "label": 0, "features": [5, 5, 0, 95], "language": "TypeScript", "is_test": false, "summary": "User type updated."},
+      {"file": "src/api/users/me.ts", "label": 0, "features": [10, 20, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Reads current user. Standard."},
+      {"file": "src/api/users/update.ts", "label": 0, "features": [25, 35, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Updates profile. Auth-checked."},
+      {"file": "src/api/admin/dashboard.ts", "label": 0, "features": [40, 40, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Admin dashboard. Behind /admin route."},
+      {"file": "src/api/health.ts", "label": 0, "features": [3, 3, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Health check endpoint. Should be public."},
+      {"file": "src/db/users.ts", "label": 0, "features": [15, 30, 0, 30], "language": "TypeScript", "is_test": false, "summary": "User repo. Untouched."},
+      {"file": "src/auth/__tests__/middleware.test.ts", "label": 0, "features": [60, 40, 0, 95], "language": "TypeScript", "is_test": true, "summary": "Test file. Did not test path-prefix attack."},
+      {"file": "src/auth/__tests__/jwt.test.ts", "label": 0, "features": [50, 35, 0, 95], "language": "TypeScript", "is_test": true, "summary": "Test file."},
+      {"file": "config/dev.env", "label": 0, "features": [2, 1, 0, 95], "language": "Env", "is_test": false, "summary": "Added JWT_SECRET dev value."},
+      {"file": "config/prod.env.template", "label": 0, "features": [2, 1, 0, 95], "language": "Env", "is_test": false, "summary": "Template only."},
+      {"file": "docs/auth.md", "label": 0, "features": [3, 0, 0, 95], "language": "Markdown", "is_test": false, "summary": "Doc update."}
+    ]
+  },
+  {
+    "domain": "code-review",
+    "task_id": "TR-CR-003",
+    "title": "Pull request review — ML training-pipeline change",
+    "description": "A 10-file PR adding gradient checkpointing to a training script. One change silently breaks reproducibility.",
+    "files": [
+      {"file": "src/train.py", "label": 1, "features": [55, 70, 3, 95], "language": "Python", "is_test": false, "summary": "Main training loop. Added `torch.compile` wrap inside the seed-setting block — non-determinism injected before seeding."},
+      {"file": "src/data.py", "label": 0, "features": [12, 30, 0, 30], "language": "Python", "is_test": false, "summary": "Dataloader. Untouched."},
+      {"file": "src/model.py", "label": 0, "features": [20, 40, 0, 30], "language": "Python", "is_test": false, "summary": "Model definition. Untouched."},
+      {"file": "src/optimizer.py", "label": 0, "features": [10, 25, 0, 30], "language": "Python", "is_test": false, "summary": "Optimizer wrapper. Untouched."},
+      {"file": "src/checkpoint.py", "label": 0, "features": [40, 50, 0, 95], "language": "Python", "is_test": false, "summary": "Checkpoint save/load. New file, isolated."},
+      {"file": "configs/baseline.yaml", "label": 0, "features": [2, 0, 0, 95], "language": "YAML", "is_test": false, "summary": "Added one new flag."},
+      {"file": "tests/test_train.py", "label": 0, "features": [30, 20, 0, 95], "language": "Python", "is_test": true, "summary": "Test file. Smoke test only."},
+      {"file": "tests/test_data.py", "label": 0, "features": [15, 15, 0, 30], "language": "Python", "is_test": true, "summary": "Test file."},
+      {"file": "Makefile", "label": 0, "features": [3, 2, 0, 95], "language": "Make", "is_test": false, "summary": "Added training target."},
+      {"file": "docs/reproducibility.md", "label": 0, "features": [2, 0, 0, 95], "language": "Markdown", "is_test": false, "summary": "Doc."}
+    ]
+  },
+  {
+    "domain": "code-review",
+    "task_id": "TR-CR-004",
+    "title": "Pull request review — frontend perf refactor",
+    "description": "An 11-file React PR optimizing the dashboard render path. One change introduces a stale-closure bug.",
+    "files": [
+      {"file": "src/components/Dashboard.tsx", "label": 1, "features": [70, 75, 6, 95], "language": "TypeScript", "is_test": false, "summary": "Memoized callback captures `userId` via stale closure when org switch fires."},
+      {"file": "src/components/Sidebar.tsx", "label": 0, "features": [25, 30, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Sidebar. Style-only diff."},
+      {"file": "src/components/Header.tsx", "label": 0, "features": [10, 15, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Header. Untouched."},
+      {"file": "src/hooks/useUser.ts", "label": 0, "features": [30, 40, 0, 30], "language": "TypeScript", "is_test": false, "summary": "User hook. Untouched."},
+      {"file": "src/hooks/useOrg.ts", "label": 0, "features": [22, 35, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Org hook. Untouched."},
+      {"file": "src/utils/memo.ts", "label": 0, "features": [40, 45, 0, 95], "language": "TypeScript", "is_test": false, "summary": "Memo helpers. New file but well-isolated."},
+      {"file": "src/styles/dashboard.module.css", "label": 0, "features": [15, 0, 0, 95], "language": "CSS", "is_test": false, "summary": "Style overrides."},
+      {"file": "src/components/__tests__/Dashboard.test.tsx", "label": 0, "features": [35, 30, 0, 95], "language": "TypeScript", "is_test": true, "summary": "Test. Org-switch case not covered."},
+      {"file": "src/components/__tests__/Sidebar.test.tsx", "label": 0, "features": [20, 20, 0, 30], "language": "TypeScript", "is_test": true, "summary": "Test."},
+      {"file": "package.json", "label": 0, "features": [3, 1, 0, 95], "language": "JSON", "is_test": false, "summary": "Dep bump."},
+      {"file": "README.md", "label": 0, "features": [2, 0, 0, 95], "language": "Markdown", "is_test": false, "summary": "Doc update."}
+    ]
+  },
+  {
+    "domain": "code-review",
+    "task_id": "TR-CR-005",
+    "title": "Pull request review — DB query optimization",
+    "description": "A 9-file PR replacing N+1 queries with batched SQL. One file introduces a privilege escalation through a missing tenant filter.",
+    "files": [
+      {"file": "src/db/queries/users.sql", "label": 1, "features": [60, 70, 4, 95], "language": "SQL", "is_test": false, "summary": "Batched user lookup query missing `WHERE tenant_id = $1`. All tenants leak."},
+      {"file": "src/db/queries/orders.sql", "label": 0, "features": [25, 30, 0, 30], "language": "SQL", "is_test": false, "summary": "Order query. Tenant filter present."},
+      {"file": "src/db/queries/products.sql", "label": 0, "features": [20, 25, 0, 30], "language": "SQL", "is_test": false, "summary": "Product query. Tenant filter present."},
+      {"file": "src/db/repo/users.ts", "label": 0, "features": [40, 50, 0, 95], "language": "TypeScript", "is_test": false, "summary": "User repository. Calls the new query but trusts it for tenancy."},
+      {"file": "src/db/repo/orders.ts", "label": 0, "features": [25, 30, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Order repository. Untouched."},
+      {"file": "src/api/users/list.ts", "label": 0, "features": [15, 25, 0, 30], "language": "TypeScript", "is_test": false, "summary": "Listing endpoint."},
+      {"file": "src/db/__tests__/users.test.ts", "label": 0, "features": [30, 25, 0, 95], "language": "TypeScript", "is_test": true, "summary": "Test. Single-tenant fixture only."},
+      {"file": "scripts/migrate.sh", "label": 0, "features": [3, 1, 0, 95], "language": "Shell", "is_test": false, "summary": "Migration runner."},
+      {"file": "README.md", "label": 0, "features": [2, 0, 0, 95], "language": "Markdown", "is_test": false, "summary": "Doc."}
+    ]
+  }
+]

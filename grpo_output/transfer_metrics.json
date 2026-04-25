@@ -1,0 +1,50 @@
+{
+  "n_episodes": 5,
+  "domain": "code-review (held-out non-CVE)",
+  "untrained_f1": 0.27586206896551724,
+  "oracle_f1": 1.0,
+  "untrained_thinking_ratio": 1.2908191099680462,
+  "oracle_thinking_ratio": 5.237067242344287,
+  "per_task": [
+    {
+      "task_id": "TR-CR-001",
+      "title": "Pull request review \u2014 payment refactor",
+      "untrained_f1": 0.25,
+      "oracle_f1": 1.0,
+      "untrained_ratio": 1.0882647943831494,
+      "oracle_ratio": 5.2289603960396045
+    },
+    {
+      "task_id": "TR-CR-002",
+      "title": "Pull request review \u2014 auth middleware migration",
+      "untrained_f1": 0.0,
+      "oracle_f1": 1.0,
+      "untrained_ratio": 1.096731448763251,
+      "oracle_ratio": 5.030035335689046
+    },
+    {
+      "task_id": "TR-CR-003",
+      "title": "Pull request review \u2014 ML training-pipeline change",
+      "untrained_f1": 0.2857142857142857,
+      "oracle_f1": 1.0,
+      "untrained_ratio": 1.220525351252291,
+      "oracle_ratio": 5.675
+    },
+    {
+      "task_id": "TR-CR-004",
+      "title": "Pull request review \u2014 frontend perf refactor",
+      "untrained_f1": 0.5,
+      "oracle_f1": 1.0,
+      "untrained_ratio": 1.739475774424146,
+      "oracle_ratio": 5.604938271604938
+    },
+    {
+      "task_id": "TR-CR-005",
+      "title": "Pull request review \u2014 DB query optimization",
+      "untrained_f1": 0.5,
+      "oracle_f1": 1.0,
+      "untrained_ratio": 1.48,
+      "oracle_ratio": 4.909871244635193
+    }
+  ]
+}
