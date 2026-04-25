@@ -1,0 +1,119 @@
+# OpenEnv Manifest — CodeReviewEnv v3
+# Meta PyTorch OpenEnv Hackathon 2026
+# Theme 3.1: World Modeling → Professional Tasks
+name: code-review-env-v3
+version: "3.0.0"
+description: >
+  Agentic security investigation environment. An LLM agent uses 6 MCP tools
+  to read code, search for patterns, flag CVE vulnerabilities, and write
+  triage reports. Trains a "thinking budget" — the agent learns WHEN to
+  reason deeply (suspicious files) and WHEN to be brief (obviously safe files).
+
+theme: "3.1 World Modeling / Professional Tasks"
+license: mit
+authors:
+  - name: lucid987654
+    affiliation: independent
+
+# ── Environment Class ──────────────────────────────────────────────
+environment:
+  class: code_review_env.server.environment:CodeReviewEnvironment
+  base: openenv.core.env_server.MCPEnvironment
+  supports_concurrent_sessions: true
+  difficulty_levels: [easy, medium, hard]
+
+# ── MCP Tools (6 total) ────────────────────────────────────────────
+tools:
+  - name: read_file
+    cost: 1
+    description: Read source code of a file in the CVE patch
+  - name: search_code
+    cost: 2
+    description: Search for a text pattern across all files in the patch
+  - name: get_function_list
+    cost: 1
+    description: List functions/methods with complexity indicators
+  - name: flag_vulnerable
+    cost: 0
+    description: Flag a file as containing the vulnerability with reasoning
+  - name: skip_file
+    cost: 0
+    description: Mark a file as safe (no vulnerability) with brief reasoning
+  - name: submit_report
+    cost: 0
+    description: Submit final triage report and end the investigation
+
+# ── Reward Function (5 components) ─────────────────────────────────
+reward:
+  type: composite
+  components:
+    - name: f1_score
+      weight: 0.35
+      description: Precision × recall on vulnerability detection
+    - name: report_quality
+      weight: 0.20
+      description: CVE ID + vuln type + code-level details mentioned in report
+    - name: investigation_efficiency
+      weight: 0.15
+      description: Strategic use of investigation budget (fewer wasted steps)
+    - name: thinking_efficiency
+      weight: 0.15
+      description: Deep reasoning on bugs, brief reasoning on safe files
+    - name: precision_bonus
+      weight: 0.15
+      description: Extra reward for zero-false-positive flagging
+
+# ── Dataset ────────────────────────────────────────────────────────
+dataset:
+  source: National Vulnerability Database
+  episodes: 150
+  files: 2892
+  features_per_file: [churn, complexity, todo_count, recency]
+  notable_cves:
+    - CVE-2021-44228 (Log4Shell)
+    - CVE-2016-5195 (Dirty COW)
+    - CVE-2021-4034 (PwnKit)
+    - CVE-2019-0708 (BlueKeep)
+    - CVE-2020-1472 (Zerologon)
+
+# ── Training ───────────────────────────────────────────────────────
+training:
+  algorithm: GRPO
+  framework:
+    - trl >= 0.17
+    - peft
+    - unsloth
+    - bitsandbytes
+  base_model: Qwen/Qwen3-8B
+  precision: bfloat16 (4-bit quantized base + bf16 LoRA)
+  lora_rank: 16
+  lora_alpha: 32
+  num_episodes: 200
+  live_environment_execution: true
+  notes: |
+    Reward function PARSES tool calls from model outputs and EXECUTES
+    them against the live environment. The model's investigation plan
+    is genuinely run, and the real environment score becomes the reward.
+    This is not a static dataset — the env is in the loop.
+
+# ── Deployment ─────────────────────────────────────────────────────
+deployment:
+  hf_space: lucid987654/code-review-env-v3
+  hf_url: https://huggingface.co/spaces/lucid987654/code-review-env-v3
+  github: https://github.com/subwaycookiecrunch/Meta-project
+  app_entry: app.py
+  sdk: gradio
+  port: 7860
+
+# ── Tags (for OpenEnv discovery) ───────────────────────────────────
+tags:
+  - openenv
+  - openenv-mcp
+  - security
+  - cve
+  - vulnerability-detection
+  - grpo
+  - qwen3
+  - thinking-budget
+  - agentic
+  - tool-use
