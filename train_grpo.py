@@ -612,25 +612,32 @@ def main():
     # ── Train ───────────────────────────────────────
     print(f"\n🚀 Starting GRPO training...")
     print(f"   Estimated time: 3-5 hours on A10G")
+    training_succeeded = False
     try:
         trainer.train(resume_from_checkpoint=_find_latest_checkpoint())
+        training_succeeded = True
     except KeyboardInterrupt:
         print("\n⚠️  Training interrupted! Saving checkpoint...")
         model.save_pretrained(os.path.join(CHECKPOINT_DIR, "interrupted"))
         tokenizer.save_pretrained(os.path.join(CHECKPOINT_DIR, "interrupted"))
+        print("❌ TRAINING DID NOT COMPLETE. Exiting.")
+        sys.exit(1)
     except Exception as e:
         print(f"\n❌ Training error: {e}")
         traceback.print_exc()
-        print("Saving emergency checkpoint...")
-        model.save_pretrained(os.path.join(CHECKPOINT_DIR, "emergency"))
-        tokenizer.save_pretrained(os.path.join(CHECKPOINT_DIR, "emergency"))
+        print("❌ TRAINING FAILED. Exiting with error.")
+        sys.exit(1)
+
+    if not training_succeeded:
+        print("❌ Training did not complete successfully. Exiting.")
+        sys.exit(1)
 
     # ── Save final model ────────────────────────────
     print(f"\n💾 Saving final model to {OUTPUT_DIR}...")
     model.save_pretrained(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
 
-    # ── Generate plots ──────────────────────────────
+    # ── Generate plots (ONLY from real training data) ──
     rewards = []
     for log in trainer.state.log_history:
         if "reward" in log:
@@ -641,21 +648,9 @@ def main():
     if rewards:
         save_training_plots(rewards, OUTPUT_DIR)
     else:
-        print("⚠️  No reward logs found. Running evaluation instead...")
-        env = CodeReviewToolEnv()
-        eval_rewards = []
-        for i in range(60):
-            env.reset()
-            for f in env._files[:3]:
-                env.read_file(f)
-            if env._files:
-                env.flag_vulnerable(env._files[0], "Suspicious pattern: unchecked buffer operation in core logic")
-            env.submit_report(
-                f"Security triage: investigated high-complexity files for vulnerability patterns.",
-                "medium"
-            )
-            eval_rewards.append(env.reward)
-        save_training_plots(eval_rewards, OUTPUT_DIR)
+        print("⚠️  No reward logs found in trainer history.")
+        print("❌ Cannot generate results without training data. Exiting.")
+        sys.exit(1)
 
     elapsed = time.time() - start_time
     print(f"\n{'='*60}")
