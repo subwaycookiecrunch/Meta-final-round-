@@ -536,6 +536,72 @@ def cast_model_to_bfloat16(model):
     return model
 
 
+# ── BULLETPROOF DTYPE-SAFETY HOOK ──────────────────────────────────
+# PEFT's prepare_model_for_kbit_training EXPLICITLY casts non-int8
+# params (including lm_head) back to float32 for stability. This
+# UNDOES our cast_model_to_bfloat16 right after we run it. Confirmed
+# via huggingface/peft#816 and #1249.
+#
+# Instead of fighting PEFT's design, we install a forward pre-hook
+# on the lm_head module that casts its INPUT (hidden_states) to match
+# the lm_head's WEIGHT dtype on every forward call. So no matter what
+# dtype the lm_head ends up as (fp32 from prepare_model_for_kbit_training
+# or bf16 from our cast), the matmul ALWAYS works.
+#
+# This is the canonical fix recommended by HF maintainers.
+def install_lm_head_dtype_hook(model):
+    """Install a forward pre-hook on lm_head so input dtype always matches weight dtype."""
+    candidates = []
+    if hasattr(model, "lm_head"):
+        candidates.append(model.lm_head)
+    if hasattr(model, "base_model"):
+        bm = model.base_model
+        if hasattr(bm, "model") and hasattr(bm.model, "lm_head"):
+            candidates.append(bm.model.lm_head)
+        if hasattr(bm, "lm_head"):
+            candidates.append(bm.lm_head)
+    if hasattr(model, "get_output_embeddings"):
+        try:
+            out = model.get_output_embeddings()
+            if out is not None:
+                candidates.append(out)
+        except Exception:
+            pass
+
+    seen = set()
+    unique_heads = []
+    for c in candidates:
+        if c is not None and id(c) not in seen and hasattr(c, "weight"):
+            seen.add(id(c))
+            unique_heads.append(c)
+
+    if not unique_heads:
+        print("⚠️  No lm_head found to install dtype hook on")
+        return model
+
+    def make_hook():
+        def hook(module, args, kwargs):
+            target = module.weight.dtype
+            new_args = tuple(
+                a.to(target) if (torch.is_tensor(a) and a.is_floating_point() and a.dtype != target) else a
+                for a in args
+            )
+            new_kwargs = {
+                k: (v.to(target) if (torch.is_tensor(v) and v.is_floating_point() and v.dtype != target) else v)
+                for k, v in kwargs.items()
+            }
+            return (new_args, new_kwargs)
+        return hook
+
+    for lm in unique_heads:
+        try:
+            lm.register_forward_pre_hook(make_hook(), with_kwargs=True)
+            print(f"🔒 lm_head dtype-safety hook installed (weight={lm.weight.dtype}, shape={tuple(lm.weight.shape)})")
+        except Exception as e:
+            print(f"⚠️  Failed to install hook on lm_head: {e}")
+    return model
+
+
 # ── Main Training Loop ─────────────────────────────────────────────
 def main():
     start_time = time.time()
@@ -579,6 +645,7 @@ def main():
             )
             print("🩹 Post-LoRA dtype fix...")
             model = cast_model_to_bfloat16(model)
+            model = install_lm_head_dtype_hook(model)
             print(f"✅ Unsloth + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA}, dtype=bf16)")
         except (ImportError, Exception) as e:
             print(f"⚠️  Unsloth failed ({e}), using transformers + bitsandbytes...")
@@ -616,6 +683,7 @@ def main():
             model = get_peft_model(model, lora_config)
             print("🩹 Post-LoRA dtype fix...")
             model = cast_model_to_bfloat16(model)
+            model = install_lm_head_dtype_hook(model)
             model.gradient_checkpointing_enable()
             print(f"✅ Transformers + 4-bit + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA}, dtype=bf16)")
     else:
@@ -647,14 +715,17 @@ def main():
         model = get_peft_model(model, lora_config)
         print("🩹 Post-LoRA dtype fix...")
         model = cast_model_to_bfloat16(model)
+        model = install_lm_head_dtype_hook(model)
         model.gradient_checkpointing_enable()
 
     # Final dtype verification — log lm_head dtype so it's obvious
-    # in the training logs whether the fix took effect.
+    # in the training logs whether the fix took effect. The hook above
+    # makes the actual dtype value irrelevant (input is auto-cast to
+    # match), but we log it for debugging clarity.
     try:
         head = model.get_output_embeddings()
         if head is not None and hasattr(head, "weight"):
-            print(f"🔬 lm_head dtype: {head.weight.dtype}  (must be torch.bfloat16)")
+            print(f"🔬 lm_head weight dtype: {head.weight.dtype}  (hook will auto-cast input to match)")
     except Exception:
         pass
 
