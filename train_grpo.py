@@ -23,6 +23,7 @@ import json
 import random
 import time
 import traceback
+import torch
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -497,6 +498,44 @@ def save_training_plots(rewards, output_dir):
     print(f"📈 Stats: early_mean={stats['early_mean']:.3f} → late_mean={stats['late_mean']:.3f} (improvement: {stats['improvement']:+.3f})")
 
 
+# ── Dtype Fix Helper ───────────────────────────────────────────────
+# Qwen3 + 4-bit quantization with bnb_4bit_compute_dtype=bfloat16
+# leaves a few Float32 modules (lm_head, embed_tokens, LayerNorms)
+# untouched. When the bf16 hidden states hit a Float32 lm_head we get:
+#   RuntimeError: expected scalar type Float but found BFloat16
+# This helper walks every parameter/buffer and force-casts any
+# non-quantized floating tensor to bfloat16 so the whole forward pass
+# is consistent. The lm_head MUST be bf16 to match the hidden states.
+def cast_model_to_bfloat16(model):
+    """Force-cast all floating-point params to bfloat16 (skips quantized int params)."""
+    target_dtype = torch.bfloat16
+    converted = 0
+    skipped_quant = 0
+    for name, param in model.named_parameters():
+        if param.dtype in (torch.uint8, torch.int8, torch.int32, torch.int64):
+            skipped_quant += 1
+            continue
+        if param.dtype in (torch.float32, torch.float16):
+            param.data = param.data.to(target_dtype)
+            converted += 1
+    for name, buf in model.named_buffers():
+        if buf.dtype in (torch.float32, torch.float16):
+            buf.data = buf.data.to(target_dtype)
+    # The lm_head is the critical one — make absolutely sure
+    if hasattr(model, "lm_head") and hasattr(model.lm_head, "weight"):
+        if model.lm_head.weight.dtype != target_dtype:
+            model.lm_head.weight.data = model.lm_head.weight.data.to(target_dtype)
+    # Walk into base_model for PEFT-wrapped models
+    if hasattr(model, "base_model"):
+        base = model.base_model
+        if hasattr(base, "model") and hasattr(base.model, "lm_head"):
+            lm = base.model.lm_head
+            if hasattr(lm, "weight") and lm.weight.dtype != target_dtype:
+                lm.weight.data = lm.weight.data.to(target_dtype)
+    print(f"   Cast {converted} params → bfloat16 (skipped {skipped_quant} quantized)")
+    return model
+
+
 # ── Main Training Loop ─────────────────────────────────────────────
 def main():
     start_time = time.time()
@@ -512,16 +551,21 @@ def main():
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     # ── Load model ──────────────────────────────────
+    # CRITICAL: We force bfloat16 EVERYWHERE because Qwen3's lm_head
+    # otherwise stays in float32 and breaks forward with
+    # "expected scalar type Float but found BFloat16".
     if USE_UNSLOTH:
         try:
             from unsloth import FastLanguageModel
-            print(f"\n🔧 Loading {MODEL_NAME} with Unsloth (4-bit)...")
+            print(f"\n🔧 Loading {MODEL_NAME} with Unsloth (4-bit, bf16)...")
             model, tokenizer = FastLanguageModel.from_pretrained(
                 model_name=MODEL_NAME,
                 max_seq_length=MAX_SEQ_LENGTH,
-                dtype=None,
+                dtype=torch.bfloat16,   # explicit bf16 (was None → auto)
                 load_in_4bit=True,
             )
+            print("🩹 Pre-LoRA dtype fix...")
+            model = cast_model_to_bfloat16(model)
             model = FastLanguageModel.get_peft_model(
                 model,
                 r=LORA_R,
@@ -533,7 +577,9 @@ def main():
                 use_gradient_checkpointing="unsloth",
                 random_state=42,
             )
-            print(f"✅ Unsloth + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA})")
+            print("🩹 Post-LoRA dtype fix...")
+            model = cast_model_to_bfloat16(model)
+            print(f"✅ Unsloth + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA}, dtype=bf16)")
         except (ImportError, Exception) as e:
             print(f"⚠️  Unsloth failed ({e}), using transformers + bitsandbytes...")
             from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -543,7 +589,7 @@ def main():
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype="bfloat16",
+                bnb_4bit_compute_dtype=torch.bfloat16,   # was string "bfloat16"
                 bnb_4bit_use_double_quant=True,
             )
             tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -551,8 +597,10 @@ def main():
                 MODEL_NAME,
                 quantization_config=bnb_config,
                 device_map="auto",
-                torch_dtype="auto",
+                torch_dtype=torch.bfloat16,   # explicit bf16 (was "auto")
             )
+            print("🩹 Pre-prepare dtype fix...")
+            model = cast_model_to_bfloat16(model)
             model = prepare_model_for_kbit_training(model)
 
             # Apply LoRA
@@ -566,22 +614,29 @@ def main():
                 task_type="CAUSAL_LM",
             )
             model = get_peft_model(model, lora_config)
+            print("🩹 Post-LoRA dtype fix...")
+            model = cast_model_to_bfloat16(model)
             model.gradient_checkpointing_enable()
-            print(f"✅ Transformers + 4-bit + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA})")
+            print(f"✅ Transformers + 4-bit + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA}, dtype=bf16)")
     else:
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        print(f"\n🔧 Loading {MODEL_NAME} with transformers + 4-bit...")
+        print(f"\n🔧 Loading {MODEL_NAME} with transformers + 4-bit (bf16)...")
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype="bfloat16",
+            bnb_4bit_compute_dtype=torch.bfloat16,   # was string "bfloat16"
             bnb_4bit_use_double_quant=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME, quantization_config=bnb_config, device_map="auto"
+            MODEL_NAME,
+            quantization_config=bnb_config,
+            device_map="auto",
+            torch_dtype=torch.bfloat16,   # explicit bf16
         )
+        print("🩹 Pre-prepare dtype fix...")
+        model = cast_model_to_bfloat16(model)
         model = prepare_model_for_kbit_training(model)
         lora_config = LoraConfig(
             r=LORA_R, lora_alpha=LORA_ALPHA,
@@ -590,7 +645,18 @@ def main():
             lora_dropout=0, bias="none", task_type="CAUSAL_LM",
         )
         model = get_peft_model(model, lora_config)
+        print("🩹 Post-LoRA dtype fix...")
+        model = cast_model_to_bfloat16(model)
         model.gradient_checkpointing_enable()
+
+    # Final dtype verification — log lm_head dtype so it's obvious
+    # in the training logs whether the fix took effect.
+    try:
+        head = model.get_output_embeddings()
+        if head is not None and hasattr(head, "weight"):
+            print(f"🔬 lm_head dtype: {head.weight.dtype}  (must be torch.bfloat16)")
+    except Exception:
+        pass
 
     # CRITICAL FIX: TRL GRPOTrainer bug workaround
     # TRL expects model.warnings_issued to exist, but some models (like Qwen3) don't have it.
