@@ -535,20 +535,63 @@ def main():
                 random_state=42,
             )
             print(f"✅ Unsloth + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA})")
-        except ImportError:
-            print("⚠️  Unsloth not available, using transformers (slower)...")
-            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except (ImportError, Exception) as e:
+            print(f"⚠️  Unsloth failed ({e}), using transformers + bitsandbytes...")
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+            from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+            # 4-bit quantization to fit 8B model in 24GB VRAM
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype="bfloat16",
+                bnb_4bit_use_double_quant=True,
+            )
             tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
             model = AutoModelForCausalLM.from_pretrained(
-                MODEL_NAME, torch_dtype="auto", device_map="auto"
+                MODEL_NAME,
+                quantization_config=bnb_config,
+                device_map="auto",
+                torch_dtype="auto",
             )
+            model = prepare_model_for_kbit_training(model)
+
+            # Apply LoRA
+            lora_config = LoraConfig(
+                r=LORA_R,
+                lora_alpha=LORA_ALPHA,
+                target_modules=["q_proj", "k_proj", "v_proj",
+                                "o_proj", "gate_proj", "up_proj", "down_proj"],
+                lora_dropout=0,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            model = get_peft_model(model, lora_config)
+            model.gradient_checkpointing_enable()
+            print(f"✅ Transformers + 4-bit + LoRA loaded (r={LORA_R}, alpha={LORA_ALPHA})")
     else:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        print(f"\n🔧 Loading {MODEL_NAME} with transformers...")
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        print(f"\n🔧 Loading {MODEL_NAME} with transformers + 4-bit...")
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype="bfloat16",
+            bnb_4bit_use_double_quant=True,
+        )
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME, torch_dtype="auto", device_map="auto"
+            MODEL_NAME, quantization_config=bnb_config, device_map="auto"
         )
+        model = prepare_model_for_kbit_training(model)
+        lora_config = LoraConfig(
+            r=LORA_R, lora_alpha=LORA_ALPHA,
+            target_modules=["q_proj", "k_proj", "v_proj",
+                            "o_proj", "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0, bias="none", task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, lora_config)
+        model.gradient_checkpointing_enable()
 
     # Ensure pad token
     if tokenizer.pad_token is None:
