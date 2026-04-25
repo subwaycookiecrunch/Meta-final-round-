@@ -274,7 +274,7 @@ The model's investigation plan literally runs. If it tries to flag a non-existen
 
 ![Training Curves](grpo_output/training_curves.png)
 
-> The training curve is generated **incrementally** every 25 steps (via `IncrementalPlotCallback`), so judges can see progress even while training is still running. The 3-panel plot shows: (1) per-step reward with smoothed trend, (2) early-vs-late reward distribution shift, (3) cumulative best reward. v2.3 trains Qwen3-1.7B for **~400 GRPO optimizer steps** (200 episodes × 2 epochs) with `LR 1e-6`, `warmup 0.10`, `KL β 0.02`, `MAX_SEQ 2048`, `MAX_COMPLETION 1024`.
+> The training curve is generated **incrementally** every 25 steps (via `IncrementalPlotCallback`), so judges can see progress even while training is still running. The 3-panel plot shows: (1) per-step reward with EMA smoothing + trend line, (2) early-vs-late reward distribution shift, (3) cumulative best reward. v2.4 trains Qwen3-1.7B for **200 GRPO optimizer steps** (200 episodes × 1 epoch) with `LR 5e-6`, `warmup 0.05`, `KL β 0.04`, `MAX_SEQ 2048`, `MAX_COMPLETION 1024`.
 
 ### Strategy ablation (`demo.py`, in-domain)
 

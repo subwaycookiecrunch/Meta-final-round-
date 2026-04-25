@@ -89,10 +89,10 @@ NUM_GENERATIONS = 2          # GRPO group size
 MAX_COMPLETION_LENGTH = int(os.environ.get("MAX_COMPLETION_LENGTH", "1024"))
 BATCH_SIZE = 1
 GRAD_ACCUM_STEPS = int(os.environ.get("GRAD_ACCUM_STEPS", "2"))
-LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "1e-6"))
-WARMUP_RATIO = 0.10
+LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "5e-6"))
+WARMUP_RATIO = 0.05
 NUM_TRAIN_EPOCHS = int(os.environ.get("NUM_TRAIN_EPOCHS", "1"))
-GRPO_BETA = 0.02
+GRPO_BETA = 0.04
 MAX_SEQ_LENGTH = int(os.environ.get("MAX_SEQ_LENGTH", "2048"))
 LORA_R = 16
 LORA_ALPHA = 32
@@ -615,17 +615,27 @@ def save_training_plots(rewards, output_dir):
     fig.suptitle(f"CodeReviewEnv v3 — GRPO Training on {model_short}",
                  fontsize=16, fontweight='bold', y=1.02)
 
-    # 1. Reward curve with smoothing
-    axes[0].plot(rewards, alpha=0.2, color="#667eea", linewidth=0.8, label="Per-step")
-    window = max(1, min(30, len(rewards) // 4))
-    if len(rewards) >= window:
-        smoothed = [sum(rewards[max(0,i-window):i+1])/min(i+1, window)
-                    for i in range(len(rewards))]
-        axes[0].plot(smoothed, color="#764ba2", linewidth=2.5, label=f"Moving avg (n={window})")
+    # 1. Reward curve with EMA smoothing + trend line
+    axes[0].plot(rewards, alpha=0.15, color="#667eea", linewidth=0.6, label="Per-step")
+    # Exponential moving average (much smoother than simple rolling)
+    if len(rewards) > 5:
+        alpha_ema = 0.12
+        ema = [rewards[0]]
+        for r in rewards[1:]:
+            ema.append(alpha_ema * r + (1 - alpha_ema) * ema[-1])
+        axes[0].plot(ema, color="#764ba2", linewidth=2.5, label="EMA (α=0.12)")
+    # Linear trend line to show clear direction
+    if len(rewards) > 10:
+        import numpy as np
+        x = np.arange(len(rewards))
+        z = np.polyfit(x, rewards, 1)
+        trend = np.polyval(z, x)
+        axes[0].plot(x, trend, color="#e74c3c", linewidth=2, linestyle="--",
+                     label=f"Trend (slope={z[0]*100:.3f}/100 steps)")
     axes[0].set_xlabel("Training Step", fontsize=12)
     axes[0].set_ylabel("Reward", fontsize=12)
     axes[0].set_title("GRPO Reward Curve", fontsize=14, fontweight='bold')
-    axes[0].legend(fontsize=10)
+    axes[0].legend(fontsize=9)
     axes[0].grid(True, alpha=0.3)
 
     # 2. Score distribution: early vs late
