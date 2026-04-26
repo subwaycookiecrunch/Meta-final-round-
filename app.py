@@ -416,11 +416,18 @@ def trace_summary(trace):
     )
 
 
-def run_demo(cve_id):
-    """Render both untrained and trained traces side-by-side for a chosen CVE."""
+def run_demo(*args):
+    """Render both untrained and trained traces side-by-side for a chosen CVE.
+    Uses *args to survive Gradio SSR which may call with 0 inputs."""
+    cve_id = args[0] if args else None
     if not TRACES:
         msg = "_No demo traces found. Run `python scripts/record_demo_traces.py` first._"
         return msg, msg, "", ""
+    if not cve_id:
+        # SSR called with no inputs — use first available trace
+        cve_id = TRACES[0]["cve_id"] if TRACES else None
+    if not cve_id:
+        return "_No CVE selected._", "_No CVE selected._", "", ""
     untrained = next((t for t in TRACES if t["cve_id"] == cve_id and t["policy"] == "untrained"), None)
     trained = next((t for t in TRACES if t["cve_id"] == cve_id and t["policy"] == "trained"), None)
     return (
