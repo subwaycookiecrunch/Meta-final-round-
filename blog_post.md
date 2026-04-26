@@ -9,6 +9,8 @@ authors:
 
 # I taught a 1.7B model to know when not to think hard
 
+![The Thinking Budget — Hero Graph](grpo_output/thinking_allocation.png)
+
 I kept watching Qwen3 generate 4,000 token `<think>` blocks on files that were obviously fine. Like, `extern int x;` does not need 3 paragraphs of analysis. But the model doesn't know that. It just thinks the same amount on everything.
 
 So I tried training it to stop doing that.
@@ -24,6 +26,8 @@ So I tried training it to stop doing that.
 | Reward-hacking attacks defeated | 0 | **5/5** |
 
 [live Space](https://huggingface.co/spaces/lucid987654/code-review-env-v3) | [GitHub](https://github.com/subwaycookiecrunch/Meta-project)
+
+![The Thinking Budget — Hero Graph](grpo_output/thinking_allocation.png)
 
 ## The setup
 
