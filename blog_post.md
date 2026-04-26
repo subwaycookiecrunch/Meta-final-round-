@@ -17,11 +17,11 @@ It's like watching someone study for an exam by spending equal time on every pag
 
 What if the model could learn *where* to think hard, not just *what* to think?
 
-![Before vs After — untrained model thinks the same on everything, trained model focuses on bugs](https://raw.githubusercontent.com/subwaycookiecrunch/Meta-project/main/grpo_output/before_after_thinking.png)
+![Before vs After — untrained model thinks the same on everything, trained model focuses on bugs](https://huggingface.co/spaces/lucid987654/code-review-env-v3/resolve/main/grpo_output/before_after_thinking.png)
 
 [Try it yourself →](https://huggingface.co/spaces/lucid987654/code-review-env-v3) · [Source code](https://github.com/subwaycookiecrunch/Meta-project)
 
----
+
 
 ## The basic idea
 
@@ -33,7 +33,7 @@ So here's what I did: before the model starts reasoning about a file, I make it 
 
 Get it right, reward. Say `short` then ramble for 500 words, penalty. Predict `long` on something trivial, also penalty. Over time it learns to match effort to difficulty.
 
----
+
 
 ## What the environment looks like
 
@@ -59,7 +59,7 @@ That third one turned out to be critical. I'll get to why.
 
 (Side note if you're building an OpenEnv: the guide reserves tool names like `reset`, `step`, `state`, `close`. I used `state` as a tool name in my first version and stuff broke silently for an hour. Fun times.)
 
----
+
 
 ## My first reward function was terrible
 
@@ -69,7 +69,7 @@ The model figured out the loophole in 30 steps. Most files are safe, right? So j
 
 Yeah I should've seen that coming.
 
----
+
 
 ## Breaking my own reward (the red team)
 
@@ -102,7 +102,7 @@ The predict-without-acting one — the one I was worried about — got obliterat
 
 Full details in [`SAFEGUARDS.md`](SAFEGUARDS.md) and you can run `python scripts/red_team.py` to reproduce.
 
----
+
 
 ## Training (and the bug that ate my afternoon)
 
@@ -130,7 +130,7 @@ Fix: teach the format before teaching the reasoning. Wrote 48 example trajectori
 
 200 steps, one A10G. Reward trends up slowly — it's not a dramatic loss curve, but the direction is clear. Non-zero rate (how often the model produces something the reward function can actually score) goes from ~60% early on to 83% by the end. Best reward was 0.252 at step 129.
 
----
+
 
 ## What happened
 
@@ -148,7 +148,7 @@ F1 went from 0.14 to 1.00 across the evaluation episodes.
 
 One thing I didn't do that I should have: compare against naive truncation. Like, what if you just hard-cut `<think>` at 80 tokens for every file? No prediction, no metacognition, just a brute-force cap. The trained model would almost certainly still win because truncation doesn't help you *detect bugs better* — it just makes you think less. But it deserves a row in the table and I don't have it. Noted for future work.
 
----
+
 
 ## Does it transfer? (kinda, but read the caveat)
 
@@ -162,7 +162,7 @@ Now look — 5 episodes is tiny. F1 of 1.00 on 5 episodes just means it got all 
 
 What makes me think it's not just luck is that the allocation *pattern* held across all five. Short on easy files, long on hard files, consistently. That's not what memorization looks like. But I'm not going to oversell a 5-episode eval.
 
----
+
 
 ## Things I'd do differently (or didn't get to)
 
@@ -178,7 +178,7 @@ This is actually a bigger question than it sounds. Right now I can't tell you wh
 
 But if you remove the tag and the behavior persists — if the model still thinks briefly on easy files and deeply on hard ones without being asked to predict upfront — then the metacognitive calibration is representational. It's in the weights, not in the scaffolding. That's the version of this that's actually interesting as a research direction. Haven't tested it, but it's first on the list.
 
----
+
 
 ## Why this matters (if you're building with reasoning models)
 
@@ -188,7 +188,7 @@ This shows you can fix it without touching the architecture. No custom layers, n
 
 Trained on one GPU. Transfers to domains it never saw. Survives adversarial attacks. 1.7 billion parameters.
 
----
+
 
 *Built for the Meta PyTorch OpenEnv Hackathon 2026 · Theme 3.1 World Modeling*
 
