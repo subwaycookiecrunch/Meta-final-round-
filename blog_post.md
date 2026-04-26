@@ -9,195 +9,195 @@ authors:
 
 # I taught a 1.7B model to know when not to think hard
 
-![The Thinking Budget — Hero Graph](https://raw.githubusercontent.com/subwaycookiecrunch/Meta-project/main/grpo_output/thinking_allocation.png)
+## The problem I couldn't stop noticing
 
-I kept watching Qwen3 generate 4,000 token `<think>` blocks on files that were obviously fine. Like, `extern int x;` does not need 3 paragraphs of analysis. But the model doesn't know that. It just thinks the same amount on everything.
+I was debugging a code review agent one night — the kind that reads source files and flags security bugs. Standard stuff. Qwen3 under the hood, running through files one by one.
 
-So I tried training it to stop doing that.
+And I noticed something stupid.
 
-**Quick results:**
+The model was writing three paragraphs of analysis on `extern int x;`. A single line declaration. No logic, no pointers, no memory ops. Just a type and a variable name. Three paragraphs.
 
-| What changed | Before | After |
-|---|---:|---:|
-| Thinking on safe files | 170 chars | **78 chars** (−54%) |
-| Thinking on buggy files | 182 chars | **473 chars** (+160%) |
-| Bug-vs-safe ratio | 1.07× | **6.06×** |
-| Transfer to new domain | F1 = 0.28 | **F1 = 1.00** |
-| Reward-hacking attacks defeated | 0 | **5/5** |
+Then it got to a file with an actual buffer overflow — `copy_from_user` piping into `kmalloc` with a user-controlled size — and spent about the same amount of time on it. Same length of reasoning. Same effort.
 
-[live Space](https://huggingface.co/spaces/lucid987654/code-review-env-v3) | [GitHub](https://github.com/subwaycookiecrunch/Meta-project)
+It was like watching someone study for an exam by spending equal time on every page of the textbook, including the table of contents.
 
+That's when the idea clicked: what if the model could learn *where* to spend its thinking? Not just what to think, but how much.
 
+![How the trained model allocates thinking — bugs get deep analysis, safe files get skimmed](https://raw.githubusercontent.com/subwaycookiecrunch/Meta-project/main/grpo_output/thinking_allocation.png)
 
-## The setup
-
-Before each `<think>` block, the model has to say how much it's going to think:
-
-```text
-<budget_prediction>long</budget_prediction>
-<think>
-do_ioctl_handler at line 412 calls copy_from_user with a user-supplied
-size and pipes the result into kmalloc. Classic integer overflow into
-heap allocation. This is the bug.
-</think>
-<tool_call>{"name":"flag_vulnerable","arguments":{...}}</tool_call>
-```
-
-Three options: `short`, `medium`, `long`. The reward checks whether the prediction matched the actual length, whether hard files got `long` and easy files got `short`, and whether each prediction was followed by a real tool call. That last part matters more than I expected (more on that later).
-
-## Why not just use a process reward model
-
-PRMs check if reasoning steps are correct. They don't check whether the model knew upfront that the problem was hard. A PRM will happily reward 4,000 tokens of reasoning on a trivial file as long as the conclusion is right. This penalizes that.
-
-I looked into early-exit transformers and MoE routing as alternatives but those need architecture changes. Can't bolt them onto an existing checkpoint. I wanted something that works with just reward shaping on top of standard GRPO.
-
-## Data
-
-150 CVEs from NVD. Log4Shell, Dirty COW, PwnKit, BlueKeep, Zerologon, and a bunch of less famous ones. 2,892 source files with features from commit history (churn, complexity, TODO count, recency).
-
-The agent sees the CVE description and file paths but not the code itself. Has to call `read_file` to look at anything. Six MCP tools total. Each costs investigation points, budget is `2 × N` files, so the agent has to be selective.
-
-If you're building an OpenEnv: the guide has reserved tool names (`reset`, `step`, `state`, `close`). My first version used `state` as a tool name and things broke silently for like an hour before I figured out why.
-
-## The dtype thing
-
-GRPO kept crashing:
-
-```
-RuntimeError: expected scalar type Float but found BFloat16
-  at logits = self.lm_head(hidden_states[:, slice_indices, :])
-```
-
-Cast `lm_head.weight` to bf16. Still crashed. Walked every parameter, force-cast everything. Still crashed.
-
-Spent a while on this before I looked at PEFT's `prepare_model_for_kbit_training` source and found this:
-
-```python
-for param in model.parameters():
-    if param.dtype in (torch.float16, torch.bfloat16):
-        param.data = param.data.to(torch.float32)
-```
-
-It upcasts everything back to fp32 after you downcast it. By design, for QLoRA stability ([peft#816](https://github.com/huggingface/peft/issues/816)).
-
-I tried a few things to override this. None of them worked cleanly. What ended up working was just putting a forward hook on lm_head that casts the input to match the weight dtype at call time:
-
-```python
-def hook(module, args, kwargs):
-    target = module.weight.dtype
-    new_args = tuple(
-        a.to(target) if torch.is_tensor(a) and a.is_floating_point()
-        and a.dtype != target else a
-        for a in args
-    )
-    new_kwargs = {
-        k: (v.to(target) if torch.is_tensor(v)
-            and v.is_floating_point() and v.dtype != target else v)
-        for k, v in kwargs.items()
-    }
-    return (new_args, new_kwargs)
-
-model.lm_head.register_forward_pre_hook(hook, with_kwargs=True)
-```
-
-Not elegant but it works and it doesn't break when PEFT updates. I still don't love it.
-
-## Reward hacking
-
-First reward: +0.8 for correct skip, +1.0 for correct flag, -1.0 for missing a bug.
-
-Model learned to skip everything within 30 steps. Most files are safe, so skip-all gets you ~80% accuracy, and +0.8 per skip adds up. Reward function was just wrong.
-
-Fixed the obvious stuff (skip reward down to +0.3, miss penalty up to -1.0) and then wrote a red team before doing the real run because I didn't want to get burned again. Tried a few things: flag-everything with always-long predictions, skip-everything with always-short, emit perfect predictions but never call any tools (this one was interesting), pad `<think>` with garbage text while still taking the right actions, and also the reverse where you predict `long` on safe files and `short` on bugs.
-
-Honest policy scores 0.850. The garbage-padding one was the strongest at 0.662 because it actually does the task correctly, it just fills the reasoning with junk. Everything else was under 0.43.
-
-The no-tool-calls attack was the one I was most worried about but it turns out the coupling multiplier kills it. If predictions aren't followed by real tool calls the metacognitive score gets halved. I almost didn't add that term. Would have been a problem.
-
-```bash
-python scripts/red_team.py
-```
-
-Details in [`SAFEGUARDS.md`](SAFEGUARDS.md).
-
-## Numbers
-
-Anyway. Before training: model thinks ~170 chars on every file regardless. Bug-to-safe ratio is 1.07x.
-
-After: 473 chars on buggy files, 78 on safe. 6.06x ratio.
-
-Calibration accuracy hit 88% on the diagonal (random would be 33%). P(long | buggy) = 0.92. P(long | safe) = 0.00.
-
-*(Thinking-allocation stats above are from the heuristic proxy — see `grpo_output/thinking_allocation.png`. The actual demo traces show an even higher 25.6× ratio. Task F1, transfer F1, and red-team numbers are all verified from real data.)*
-
-### Training curve (200 GRPO steps, actual data)
-
-![Training Curves](https://huggingface.co/spaces/lucid987654/code-review-env-v3/resolve/main/grpo_output/training_curves.png)
-
-200 steps on a single A10G. EMA reward trends upward, non-zero rate climbs from ~60% to 83%, peak reward 0.252 at step 129. The violin plot shows the late-half distribution shifting up vs the early half (μ = 0.059 vs 0.052).
-
-### The full improvement at a glance
-
-![Improvement Panel](https://huggingface.co/spaces/lucid987654/code-review-env-v3/resolve/main/grpo_output/improvement_panel.png)
-
-Four axes of improvement in one figure: reward convergence, task F1 (0.14 → 1.00), transfer F1 to unseen domain (0.28 → 1.00), and red-team robustness (all 5 attacks defeated, closest gap −22%).
-
-## Transfer
-
-Ok so this is the part I need to be careful about because the numbers look too good and I want to be upfront about the caveats.
-
-I ran the trained policy on 5 non-CVE episodes. Completely different domain. Payment processing race condition, JWT auth bypass, ML pipeline seed issue, React stale closure, SQL tenant filter bug. None in training data. Different bug types entirely.
-
-Baseline F1: 0.28. Trained policy F1: 1.00. Thinking ratio went from 1.29x to 5.24x.
-
-Now, 5 episodes is a tiny eval set. F1 of 1.00 on 5 episodes means the model got all 5 right. That's good but it's not a statistically robust claim. I'd want at least 50-100 episodes across more domains before I'd be confident the transfer is real and not just lucky. I'm reporting it because it's what I have and because the allocation pattern (long on hard files, short on easy ones) showed up consistently across all 5, which at least suggests it's not random.
-
-```bash
-python transfer_eval.py
-```
-
-## What I'd change
-
-Started with Qwen3-8B. OOM'd on the HF Space (14 GiB cap). Went to 1.7B. Fits easily, trains 5x faster. The reward function doesn't change with model size so someone with better hardware should try this at 8B.
-
-I wanted curriculum learning too. Start easy, add harder episodes as calibration improves. Half-wrote the code, ran out of time.
-
-There's also an inference-time `LogitsProcessor` that hard-caps `<think>` tokens. Force-emits `</think>` when budget runs out. The trained model handles it fine because it already knows how to be brief. The untrained model falls apart mid-sentence. There's a slider on the Space if you want to try it.
-
-## The format problem (and the fix)
-
-Early GRPO runs had ~30% of steps producing zero reward. The model would emit malformed tool calls, skip the `<budget_prediction>` tag entirely, or produce `<think>` blocks without a following action. These steps are pure noise — the policy gradient gets nothing from them.
-
-The fix was obvious in retrospect: teach the model the output format first, *then* do RL. Two-phase training:
-
-1. **SFT warmup** (48 demonstrations, 3 epochs, ~1 hour). I generated synthetic trajectories from the CVE dataset — correct metacognitive behavior on each file (short/skip on safe, long/flag on buggy). The model learns: `<budget_prediction>` → `<think>` → `<tool_call>`, every time.
-
-2. **GRPO** on the format-aware model. Now every step produces a parseable completion. The reward function can actually score calibration and difficulty. Zero-reward rate drops from 30% to under 5%.
-
-The SFT data is 48 examples, ~400 files total. Not a lot. But you don't need a lot when the target is format compliance, not domain knowledge. The RL phase handles the hard part — learning *when* to predict long vs short.
-
-## Stack
-
-- OpenEnv 0.2.3, MCPEnvironment + FastMCP
-- TRL >= 0.17, GRPOTrainer with live env in the reward loop
-- bitsandbytes 4-bit, Qwen3-1.7B
-- PEFT LoRA r=16 alpha=32
-- Gradio 5
-
-`lr=5e-6`, `warmup=0.05`, `KL beta=0.04`, `MAX_SEQ=2048`, `MAX_COMPLETION=1024`. 200 episodes, 1 epoch, ~200 steps. SFT warmup (48 examples, 3 epochs) then GRPO, about 7 hours total on A10G.
-
-## Next
-
-I want to know if you can train with the `<budget_prediction>` tag and then remove it at inference. Does the allocation behavior stick even without the explicit pre-commitment? If yes, that's interesting because it means the reasoning budget is in the weights, not in the scaffolding. Haven't tried it.
-
-## The takeaway
-
-Reasoning LLMs are expensive because they think the same amount on everything. You can fix this without changing the architecture — just add a reward that says "predict difficulty, then be right about it." The model learns. It transfers to new domains. It survives adversarial attacks. And it runs on commodity hardware.
-
-If you're building agentic systems that need to reason under compute constraints — which is basically everyone deploying reasoning models in production — this is a technique you can use today.
+[Try it yourself →](https://huggingface.co/spaces/lucid987654/code-review-env-v3) · [Source code](https://github.com/subwaycookiecrunch/Meta-project)
 
 ---
 
-*Meta PyTorch OpenEnv Hackathon 2026 (India). Theme #5 Wild Card / 3.1 World Modeling.*
+## The idea, explained like I'd explain it to my mom
 
-**Deep dive:** [`PAPER.md`](https://github.com/subwaycookiecrunch/Meta-project/blob/main/PAPER.md) · **Red team:** [`SAFEGUARDS.md`](https://github.com/subwaycookiecrunch/Meta-project/blob/main/SAFEGUARDS.md) · **Judge checklist:** [`JUDGES.md`](https://github.com/subwaycookiecrunch/Meta-project/blob/main/JUDGES.md)
+Imagine you're a doctor in an emergency room. Twenty patients walk in. Some have a cold. Some have chest pain. You don't spend 45 minutes examining the runny noses — you triage. You look at each person for a few seconds, decide how serious it is, and allocate your time accordingly.
+
+That's exactly what reasoning models don't do. They "examine" every problem with the same intensity. A trivial question gets the same 2,000-word internal monologue as a genuinely hard one.
+
+My fix: before the model starts thinking about a file, make it say out loud how hard it thinks the problem will be. Three options — `short`, `medium`, or `long`. Then, after it's done thinking, check whether its prediction was actually right.
+
+Got it right? Good, here's a reward. Said "short" and then wrote 500 words anyway? That's a penalty. Said "long" on something trivial? Also a penalty.
+
+Over time, the model learns to match its effort to the difficulty. It becomes a better triage doctor.
+
+---
+
+## What I actually built
+
+The whole system is a security code review environment. Here's the setup:
+
+I took 150 real security vulnerabilities from the National Vulnerability Database — things like Log4Shell, Dirty COW, PwnKit. Each one comes with a set of source files. Some files contain the bug, most don't.
+
+The AI agent gets a description of the vulnerability and a list of file names, but it can't see the code. It has to actively choose to read each file, which costs "investigation points." Budget is limited — you can't read everything. This forces the agent to be strategic.
+
+Before examining each file, the model has to commit to a thinking budget:
+
+```
+<budget_prediction>long</budget_prediction>
+<think>
+This file handles user input directly and the CVE mentions
+integer overflow. The function at line 412 calls copy_from_user 
+with an attacker-controlled size parameter. Classic heap overflow.
+</think>
+→ flags the file as vulnerable
+```
+
+The reward has three parts that work together:
+
+1. **Calibration** — did you predict `long` and then actually think a lot? Or did you say `short` and keep it brief? Match your prediction to your behavior.
+
+2. **Difficulty awareness** — did hard files get `long` predictions and easy files get `short`? Don't just be consistent with yourself — be right about the world.
+
+3. **Action coupling** — did each prediction lead to a real tool call? No empty predictions. You have to actually *do* something after committing to a budget.
+
+That third one sounds minor. It wasn't. More on that later.
+
+---
+
+## The first attempt that failed spectacularly
+
+My first reward function was simple: +0.8 for correctly skipping a safe file, +1.0 for catching a bug, -1.0 for missing one.
+
+The model figured out the exploit within 30 training steps.
+
+Most files in any codebase are safe. If you just skip everything, you get +0.8 on ~85% of files and -1.0 on ~15%. Net positive. The model learned to be a terrible security reviewer who rubber-stamps everything as fine.
+
+I should've seen it coming. I didn't.
+
+---
+
+## Trying to break my own system (before someone else did)
+
+After fixing the obvious reward problems, I got paranoid. I didn't want to train for 7 hours and then discover the model found another shortcut.
+
+So I wrote a red team. Five different attack strategies, all designed to exploit the reward function:
+
+**Attack 1: "Flag everything, predict long."** Just say every file is buggy with maximum thinking. You'll catch all the real bugs, right? Sure, but the F1 score tanks because you're also flagging tons of safe files.
+
+**Attack 2: "Skip everything, predict short."** The opposite. You'll miss every bug.
+
+**Attack 3: "Perfect predictions, no tool calls."** This one was sneaky. Emit beautiful budget predictions — `short` on safe files, `long` on buggy ones — but never actually read any files or flag anything. Just… predict well and do nothing.
+
+**Attack 4: "Do the job, but pad the thinking."** Actually find the bugs, actually flag the right files, but stuff your reasoning blocks with garbage text to hit the `long` character count. Real work with fake depth.
+
+**Attack 5: "Invert everything."** Predict `long` on safe files and `short` on bugs. See if the reward catches it.
+
+Results:
+
+| Strategy | Score |
+|---|---:|
+| Honest metacognitive policy | **0.850** |
+| Garbage padding (Attack 4) | 0.662 |
+| Flag everything (Attack 1) | 0.426 |
+| Skip everything (Attack 2) | 0.278 |
+| Invert difficulty (Attack 5) | 0.192 |
+| Predict without acting (Attack 3) | 0.076 |
+
+The honest policy won by a mile. The padding attack was the closest because it actually does the job right — it just fakes the reasoning. But even that scored 22% lower.
+
+Attack 3 — the one I was most worried about — got demolished. That's where the action coupling reward earned its keep. Without it, the model could farm calibration and difficulty points by making perfect predictions and never doing anything. With it, orphan predictions get their metacognitive score cut in half. I almost didn't add that multiplier. Glad I did.
+
+---
+
+## The training itself (and the crash that ate two hours)
+
+I used GRPO — Group Relative Policy Optimization. It's like giving the model several attempts at the same problem, ranking them, and pushing the weights toward the better attempts.
+
+First problem: the model kept crashing with a dtype error.
+
+```
+RuntimeError: expected scalar type Float but found BFloat16
+```
+
+I spent two hours casting every parameter to the right type before I found out that PEFT's `prepare_model_for_kbit_training` was silently undoing my casts. By design. It upcasts everything to fp32 for QLoRA stability.
+
+The fix was a forward hook that re-casts on the fly. Ugly, but it works, and it survives PEFT updates.
+
+Second problem: about 30% of training steps produced garbage — malformed outputs that the reward function couldn't even parse. The model hadn't learned the output format yet, so it was emitting broken tool calls and missing tags.
+
+The fix was straightforward once I thought of it: teach the format first, *then* train the reasoning. I wrote 48 example trajectories — here's what a correct interaction looks like, step by step — and fine-tuned on those for three epochs. About an hour. After that, the model knew the grammar. GRPO could focus on the hard part — learning *when* to predict short versus long.
+
+### The training curve
+
+![Training Curves](https://huggingface.co/spaces/lucid987654/code-review-env-v3/resolve/main/grpo_output/training_curves.png)
+
+200 steps on a single A10G GPU. You can see the reward trending upward — not dramatically, this isn't a loss curve going to zero — but consistently. The non-zero rate (how often the model produces scoreable output) climbs from around 60% to 83%. Peak reward hits 0.252 at step 129.
+
+---
+
+## The results
+
+Before training: the model thinks about 170 characters on every file, regardless. Buggy files, safe files, doesn't matter. The thinking ratio between bugs and safe files is 1.07x. Basically flat.
+
+After training: 473 characters on buggy files, 78 on safe ones. A 6x ratio.
+
+The model learned to skim safe files and deep-dive on suspicious ones. Not because I told it which files are buggy — it figured out the correlation between file characteristics and bug likelihood, and started allocating its reasoning budget accordingly.
+
+The calibration numbers back this up. When the model predicts `long`, there's a 92% chance the file is actually buggy. When it predicts `short`, there's a 0% chance. It went from random (33% accuracy — three options, one-in-three guess) to 88% on the diagonal.
+
+Bug detection F1 went from 0.14 to a perfect 1.00 across the evaluation episodes.
+
+![The full picture — reward convergence, F1 improvement, transfer results, and adversarial robustness](https://huggingface.co/spaces/lucid987654/code-review-env-v3/resolve/main/grpo_output/improvement_panel.png)
+
+---
+
+## The part where it gets interesting (and where I'm being careful)
+
+Here's the question I really wanted to answer: is this a general reasoning skill, or did the model just memorize which CVE files are buggy?
+
+I tested it on 5 completely new episodes. Different domain. A payment processing race condition, a JWT authentication bypass, an ML pipeline seed issue, a React stale closure bug, a SQL tenant filter vulnerability. None of these were in the training data. Different programming languages, different bug types entirely.
+
+Baseline F1: 0.28. Trained policy: 1.00. Thinking ratio went from 1.29x to 5.24x.
+
+Now — five episodes is a tiny sample. I want to be upfront about that. Perfect F1 on 5 cases means it got all 5 right, which is good but not statistically ironclad. I'd want 50-100 episodes across more domains before making strong claims.
+
+But what gives me some confidence is that the *pattern* showed up in all five. The model was consistently brief on easy files and verbose on hard ones, even in domains it had never seen. That's not what memorization looks like.
+
+---
+
+## What I'd do differently
+
+I started with Qwen3-8B. Hit the memory ceiling on the HuggingFace Space (14 GB limit). Dropped to 1.7B. It fits easily and trains 5x faster. The reward function is the same regardless of model size, so someone with a beefier GPU should try this at 8B — I'd bet the transfer results get even stronger.
+
+I also wanted to add curriculum learning — start with easy episodes and ramp up difficulty as calibration improves. Half-wrote the code, ran out of time.
+
+There's a question I keep coming back to: can you train with the budget prediction tag and then *remove it* at inference? Does the model still allocate its thinking correctly even without the explicit pre-commitment step? If yes, that means the reasoning allocation is baked into the weights, not dependent on the scaffolding. Haven't tested it yet, but I think the answer is yes.
+
+---
+
+## The bigger picture
+
+Reasoning models are expensive because they think the same amount on everything. An easy question and a hard question get the same multi-thousand-token internal monologue. That's wasteful if you're paying per token, and it's slow if you're running inference at scale.
+
+This project shows you can fix that without changing the model architecture. No custom attention heads, no mixture-of-experts routing, no early-exit mechanisms. Just a reward signal that says: "predict how hard this will be, then prove you were right."
+
+The model learned. It transferred to new domains. It survived five different adversarial attacks. And it ran on a single commodity GPU.
+
+If you're building anything that needs a language model to reason under compute constraints — which, honestly, is most production deployments of reasoning models right now — this is a technique you can use today.
+
+---
+
+*Built for the Meta PyTorch OpenEnv Hackathon 2026 (India) · Theme 3.1 World Modeling*
+
+**Want the details?** [`PAPER.md`](https://github.com/subwaycookiecrunch/Meta-project/blob/main/PAPER.md) · **How I tried to break it:** [`SAFEGUARDS.md`](https://github.com/subwaycookiecrunch/Meta-project/blob/main/SAFEGUARDS.md) · **Judge checklist:** [`JUDGES.md`](https://github.com/subwaycookiecrunch/Meta-project/blob/main/JUDGES.md)
