@@ -15,7 +15,7 @@
 | Code snippets indexed | 2,869 across all episodes |
 | Tools exposed | 4 MCP tools (see §3) |
 | Server | FastAPI + Uvicorn, deployed as a HuggingFace Space |
-| Source file | [`server/environment.py`](server/environment.py) (~440 lines) |
+| Source file | [`environment.py`](code_review_env/server/environment.py) (~440 lines) |
 
 The env follows the canonical OpenEnv contract: `reset()` → `step(action)` → `state()` → `reward`.
 
@@ -116,14 +116,14 @@ Every defensive mechanism is enumerated here so a judge can verify by file looku
 
 | Attack vector | Defence | Where in code |
 |---|---|---|
-| **Flag-everything** to drive recall up | F1 normalisation; flag budget `F` | [`server/environment.py:464`](server/environment.py) |
+| **Flag-everything** to drive recall up | F1 normalisation; flag budget `F` | [`environment.py`](code_review_env/server/environment.py) |
 | **Flag-nothing** to avoid penalty | `format_compliance` requires non-empty flag list when bugs present | reward fn in `train_grpo.py` |
-| **Infinite tool-call loop** to delay termination | Hard step cap = `3·num_files`; investigation budget | [`server/environment.py:185`](server/environment.py), [348](server/environment.py) |
+| **Infinite tool-call loop** to delay termination | Hard step cap = `3·num_files`; investigation budget | [`environment.py`](code_review_env/server/environment.py) |
 | **Predict-long-everywhere** to maximise calibration | `difficulty_awareness` component penalises uncorrelated predictions | [`metacognitive_reward.py`](metacognitive_reward.py) |
 | **Predict without thinking** to game the budget tag | `coupling` component requires actual `<think>` length to match prediction band | [`metacognitive_reward.py`](metacognitive_reward.py) |
 | **Random-text payload** to satisfy format check | `valid_json` + `action_diversity` require real tool calls; F1 measures real outcomes | reward fn in `train_grpo.py` |
 | **Edit timer / abuse globals** | Tool calls run in the FastMCP server process; agent cannot mutate session state, snippet store, or label dict | OpenEnv server boundary |
-| **Feature-threshold shortcut** (NEW) | ~20% of safe files have inflated risk features ("deceptive traps") — looks like high-churn, high-complexity bug candidates, but are actually safe. Forces real reasoning, not feature hacking | [`server/environment.py`](server/environment.py) — `reset()` |
+| **Feature-threshold shortcut** (NEW) | ~20% of safe files have inflated risk features ("deceptive traps") — looks like high-churn, high-complexity bug candidates, but are actually safe. Forces real reasoning, not feature hacking | [`environment.py`](code_review_env/server/environment.py) — `reset()` |
 
 All eight attack vectors are empirically tested by [`scripts/red_team.py`](scripts/red_team.py)
 and documented in [`SAFEGUARDS.md`](SAFEGUARDS.md). Every attempted attack scores

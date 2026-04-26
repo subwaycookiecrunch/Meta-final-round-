@@ -42,9 +42,9 @@ This is **not** a code-review tool. The CVE triage is a *substrate*. The contrib
 
 | Sub-criterion | Evidence | Where to look |
 |---|---|---|
-| Action / observation / state schema | OpenEnv `MCPEnvironment` with 6 tools | [`server/environment.py`](server/environment.py) |
-| `reset()`, `step()`, episode termination | Defined in `CodeReviewEnvironment` | [`server/environment.py`](server/environment.py) |
-| FastAPI / FastMCP exposure | Server boots on Space launch | [`server/app.py`](server/app.py) |
+| Action / observation / state schema | OpenEnv `MCPEnvironment` with 6 tools | [`environment.py`](code_review_env/server/environment.py) |
+| `reset()`, `step()`, episode termination | Defined in `CodeReviewEnvironment` | [`environment.py`](code_review_env/server/environment.py) |
+| FastAPI / FastMCP exposure | Server boots on Space launch | [`app.py`](app.py) |
 | Real-world data | 150 NVD CVEs, 2,892 source files | [`data/cve_training_data.json`](data/cve_training_data.json) |
 | Documented manifest | `openenv.yaml` v3.2.0 with composite reward declaration | [`openenv.yaml`](openenv.yaml) |
 
@@ -52,7 +52,7 @@ This is **not** a code-review tool. The CVE triage is a *substrate*. The contrib
 
 | Sub-criterion | Evidence | Where to look |
 |---|---|---|
-| ≥2 independent reward components | **6** components: F1 (35%) + report (15%) + investigation (10%) + thinking efficiency (10%) + precision bonus (10%) + metacognitive (30%) | `server/environment.py::compute_score`; `metacognitive_reward.py::compute_metacognitive_reward` |
+| ≥2 independent reward components | **6** components: F1 (35%) + report (15%) + investigation (10%) + thinking efficiency (10%) + precision bonus (10%) + metacognitive (30%) | `code_review_env/server/environment.py::compute_score`; `metacognitive_reward.py::compute_metacognitive_reward` |
 | Verifiable / objective signals | Live tool execution → ground-truth F1; regex-checked format compliance; deterministic calibration check | `train_grpo.py::reward_fn` |
 | No LLM-as-judge dependence | Zero LLM calls in the reward path | `train_grpo.py::reward_fn` (audit by reading) |
 
@@ -66,7 +66,7 @@ This is **not** a code-review tool. The CVE triage is a *substrate*. The contrib
 | **Empirical adversarial test** | 5 attack families, all defeated; honest policy 0.850, best attack 0.662 (−22%) | [`SAFEGUARDS.md`](SAFEGUARDS.md), [`scripts/red_team.py`](scripts/red_team.py), Space → 🛡 Red Team tab |
 | Anti-gaming clamps in text reward | Sub-50-char clamp, duplicated-line clamp, skip-spam clamp | `train_grpo.py::reward_fn` lines 457-463 |
 | Coupling = multiplier (not sum) | Caps unattached prediction spam at 50% of metacog signal | `metacognitive_reward.py::compute_metacognitive_reward`, line 215 |
-| Sandboxed execution | Tools run inside `MCPEnvironment`, no shell access | `server/environment.py` |
+| Sandboxed execution | Tools run inside `MCPEnvironment`, no shell access | `code_review_env/server/environment.py` |
 
 > **This is the criterion most submissions will skip.** §8 of the guide explicitly says *"Reward hacking is one of the biggest practical failure modes."* FAQ Q43–Q44 calls for layered verification. We treated both as primary deliverables, not as a polish-pass.
 
@@ -84,7 +84,7 @@ This is **not** a code-review tool. The CVE triage is a *substrate*. The contrib
 
 | Sub-criterion | Evidence | Where to look |
 |---|---|---|
-| Episode difficulty levels | 3-level curriculum: ≤15 / 16-29 / 30+ files | `server/environment.py`, `openenv.yaml` |
+| Episode difficulty levels | 3-level curriculum: ≤15 / 16-29 / 30+ files | `code_review_env/server/environment.py`, `openenv.yaml` |
 | Reward signal density | Metacog reward gives non-zero signal at the *first* `<budget_prediction>` tag — model gets gradient as soon as the format is emitted, ~step 5–10 | `train_grpo.py::reward_fn`, `compute_metacognitive_reward` |
 
 ### §19.3 — Evidence the model improved ⏳ (training in progress) / ✅ (proxy)
