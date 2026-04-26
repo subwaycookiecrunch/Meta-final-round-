@@ -17,7 +17,7 @@ It's like watching someone study for an exam by spending equal time on every pag
 
 What if the model could learn *where* to think hard, not just *what* to think?
 
-![How the trained model allocates thinking — bugs get deep analysis, safe files get skimmed](https://raw.githubusercontent.com/subwaycookiecrunch/Meta-project/main/grpo_output/thinking_allocation.png)
+![Before vs After — untrained model thinks the same on everything, trained model focuses on bugs](https://raw.githubusercontent.com/subwaycookiecrunch/Meta-project/main/grpo_output/before_after_thinking.png)
 
 [Try it yourself →](https://huggingface.co/spaces/lucid987654/code-review-env-v3) · [Source code](https://github.com/subwaycookiecrunch/Meta-project)
 
